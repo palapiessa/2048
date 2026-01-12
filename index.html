@@ -72,6 +72,19 @@
       </div>
     </div>
 
+    <div class="log-panel" data-log-panel>
+      <div class="log-panel__header">
+        <h2 class="log-panel__title">Event Log</h2>
+        <span class="log-panel__status" data-log-status>Empty</span>
+      </div>
+      <div class="log-panel__actions">
+        <button type="button" class="log-panel__button" data-log-action="refresh">Refresh</button>
+        <button type="button" class="log-panel__button" data-log-action="export">Export</button>
+        <button type="button" class="log-panel__button" data-log-action="clear">Clear</button>
+      </div>
+      <pre class="log-panel__output" data-log-output>No logs captured yet.</pre>
+    </div>
+
     <p class="game-explanation">
       <strong class="important">How to play:</strong> Use your <strong>arrow keys</strong> to move the tiles. When two tiles with the same number touch, they <strong>merge into one!</strong>
     </p>
@@ -93,7 +106,9 @@
   <script src="js/grid.js"></script>
   <script src="js/tile.js"></script>
   <script src="js/local_storage_manager.js"></script>
+  <script src="js/logger.js"></script>
   <script src="js/game_manager.js"></script>
   <script src="js/application.js"></script>
+  <script src="js/log_viewer.js"></script>
 </body>
 </html>

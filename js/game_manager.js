@@ -13,6 +13,8 @@ function GameManager(size, InputManager, Actuator, StorageManager) {
   this.setup();
 }
 
+var DIRECTION_NAMES = ["UP", "RIGHT", "DOWN", "LEFT"];
+
 // Restart the game
 GameManager.prototype.restart = function () {
   this.storageManager.clearGameState();
@@ -72,7 +74,10 @@ GameManager.prototype.addRandomTile = function () {
     var tile = new Tile(this.grid.randomAvailableCell(), value);
 
     this.grid.insertTile(tile);
+    return tile;
   }
+
+  return null;
 };
 
 // Sends the updated grid to the actuator
@@ -109,6 +114,26 @@ GameManager.prototype.serialize = function () {
   };
 };
 
+GameManager.prototype.captureSimpleState = function () {
+  var rows = [];
+
+  for (var y = 0; y < this.size; y++) {
+    var row = [];
+
+    for (var x = 0; x < this.size; x++) {
+      var cell = this.grid.cells[x][y];
+      row.push(cell ? cell.value : 0);
+    }
+
+    rows.push(row);
+  }
+
+  return {
+    grid: rows,
+    score: this.score
+  };
+};
+
 // Save all tile positions and remove merger info
 GameManager.prototype.prepareTiles = function () {
   this.grid.eachCell(function (x, y, tile) {
@@ -121,9 +146,20 @@ GameManager.prototype.prepareTiles = function () {
 
 // Move a tile and its representation
 GameManager.prototype.moveTile = function (tile, cell) {
+  var from = { x: tile.x, y: tile.y };
+
   this.grid.cells[tile.x][tile.y] = null;
   this.grid.cells[cell.x][cell.y] = tile;
   tile.updatePosition(cell);
+
+  if (typeof logEvent === "function") {
+    logEvent({
+      type: "moveTile",
+      value: tile.value,
+      from: from,
+      to: { x: cell.x, y: cell.y }
+    });
+  }
 };
 
 // Move tiles on the grid in the specified direction
@@ -132,6 +168,11 @@ GameManager.prototype.move = function (direction) {
   var self = this;
 
   if (this.isGameTerminated()) return; // Don't do anything if the game's over
+
+  var prevState = this.captureSimpleState();
+  var mergeEvents = [];
+  var spawnedTile = null;
+  var directionName = DIRECTION_NAMES[direction] || direction;
 
   var cell, tile;
 
@@ -154,6 +195,10 @@ GameManager.prototype.move = function (direction) {
 
         // Only one merger per row traversal?
         if (next && next.value === tile.value && !next.mergedFrom) {
+          var mergeFromRow = tile.y;
+          var mergeFromCol = tile.x;
+          var mergeIntoRow = positions.next.y;
+          var mergeIntoCol = positions.next.x;
           var merged = new Tile(positions.next, tile.value * 2);
           merged.mergedFrom = [tile, next];
 
@@ -162,6 +207,13 @@ GameManager.prototype.move = function (direction) {
 
           // Converge the two tiles' positions
           tile.updatePosition(positions.next);
+
+          mergeEvents.push({
+            from: [mergeFromRow, mergeFromCol],
+            into: [mergeIntoRow, mergeIntoCol],
+            value: tile.value,
+            result: merged.value
+          });
 
           // Update the score
           self.score += merged.value;
@@ -180,7 +232,7 @@ GameManager.prototype.move = function (direction) {
   });
 
   if (moved) {
-    this.addRandomTile();
+    spawnedTile = this.addRandomTile();
 
     if (!this.movesAvailable()) {
       this.over = true; // Game over!
@@ -188,9 +240,22 @@ GameManager.prototype.move = function (direction) {
 
     this.actuate();
   }
+
+  if (typeof logEvent === "function") {
+    var nextState = this.captureSimpleState();
+
+    logEvent({
+      type: "move",
+      direction: directionName,
+      prev: prevState,
+      next: nextState,
+      merges: mergeEvents,
+      spawnedTile: spawnedTile ? { row: spawnedTile.y, col: spawnedTile.x, value: spawnedTile.value } : null,
+      valid: moved
+    });
+  }
 };
 
-// Get the vector representing the chosen direction
 GameManager.prototype.getVector = function (direction) {
   // Vectors representing tile movement
   var map = {
@@ -198,6 +263,7 @@ GameManager.prototype.getVector = function (direction) {
     1: { x: 1,  y: 0 },  // Right
     2: { x: 0,  y: 1 },  // Down
     3: { x: -1, y: 0 }   // Left
+
   };
 
   return map[direction];
