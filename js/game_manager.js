@@ -5,6 +5,8 @@ function GameManager(size, InputManager, Actuator, StorageManager) {
   this.actuator       = new Actuator;
 
   this.startTiles     = 2;
+  this.turn           = 0;
+  this.gameEndLogged  = false;
 
   this.inputManager.on("move", this.move.bind(this));
   this.inputManager.on("restart", this.restart.bind(this));
@@ -25,6 +27,7 @@ GameManager.prototype.restart = function () {
 // Keep playing after winning (allows going over 2048)
 GameManager.prototype.keepPlaying = function () {
   this.keepPlaying = true;
+  this.gameEndLogged = false;
   this.actuator.continueGame(); // Clear the game won/lost message
 };
 
@@ -45,12 +48,16 @@ GameManager.prototype.setup = function () {
     this.over        = previousState.over;
     this.won         = previousState.won;
     this.keepPlaying = previousState.keepPlaying;
+    this.turn        = typeof previousState.turn === "number" ? previousState.turn : 0;
+    this.gameEndLogged = !!previousState.gameEndLogged;
   } else {
     this.grid        = new Grid(this.size);
     this.score       = 0;
     this.over        = false;
     this.won         = false;
     this.keepPlaying = false;
+    this.turn        = 0;
+    this.gameEndLogged = false;
 
     // Add the initial tiles
     this.addStartTiles();
@@ -110,7 +117,9 @@ GameManager.prototype.serialize = function () {
     score:       this.score,
     over:        this.over,
     won:         this.won,
-    keepPlaying: this.keepPlaying
+    keepPlaying: this.keepPlaying,
+    turn:        this.turn,
+    gameEndLogged: this.gameEndLogged
   };
 };
 
@@ -155,6 +164,7 @@ GameManager.prototype.moveTile = function (tile, cell) {
   if (typeof logEvent === "function") {
     logEvent({
       type: "moveTile",
+      turn: this.turn,
       value: tile.value,
       from: from,
       to: { x: cell.x, y: cell.y }
@@ -168,6 +178,9 @@ GameManager.prototype.move = function (direction) {
   var self = this;
 
   if (this.isGameTerminated()) return; // Don't do anything if the game's over
+
+  this.turn += 1;
+  var turnIndex = this.turn;
 
   var prevState = this.captureSimpleState();
   var mergeEvents = [];
@@ -246,6 +259,7 @@ GameManager.prototype.move = function (direction) {
 
     logEvent({
       type: "move",
+      turn: turnIndex,
       direction: directionName,
       prev: prevState,
       next: nextState,
@@ -253,6 +267,21 @@ GameManager.prototype.move = function (direction) {
       spawnedTile: spawnedTile ? { row: spawnedTile.y, col: spawnedTile.x, value: spawnedTile.value } : null,
       valid: moved
     });
+
+    if (!this.gameEndLogged && this.isGameTerminated()) {
+      this.gameEndLogged = true;
+      logEvent({
+        type: "gameEnd",
+        turn: turnIndex,
+        reason: this.over ? "loss" : "win",
+        score: this.score,
+        highestTile: this.getHighestTileValue(),
+        state: nextState,
+        over: this.over,
+        won: this.won,
+        keepPlaying: this.keepPlaying
+      });
+    }
   }
 };
 
@@ -331,6 +360,18 @@ GameManager.prototype.tileMatchesAvailable = function () {
   }
 
   return false;
+};
+
+GameManager.prototype.getHighestTileValue = function () {
+  var max = 0;
+
+  this.grid.eachCell(function (x, y, tile) {
+    if (tile && tile.value > max) {
+      max = tile.value;
+    }
+  });
+
+  return max;
 };
 
 GameManager.prototype.positionsEqual = function (first, second) {
