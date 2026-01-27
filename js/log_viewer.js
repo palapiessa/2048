@@ -43,20 +43,22 @@
       return (window._gameLogs || []).slice();
     }
 
-    function render() {
+    function render(forceUpdate) {
       var logs = currentLogs();
-      if (output) {
-        output.textContent = formatLogs(logs);
-      }
       if (status) {
         status.textContent = logs.length ? logs.length + " event(s)" : "Empty";
+      }
+      
+      // Only render full JSON if explicitly requested or if the log is small
+      if (output && (forceUpdate === true || logs.length < 50)) {
+        output.textContent = formatLogs(logs);
       }
       return logs;
     }
 
     if (refreshBtn) {
       refreshBtn.addEventListener("click", function () {
-        render();
+        render(true);
       });
     }
 
