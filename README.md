@@ -6,14 +6,14 @@
 ## License
 2048 is licensed under the [MIT license](https://github.com/gabrielecirulli/2048/blob/master/LICENSE.txt).
 
-## Install instructions
+## Install instructions for python scripts
 - install uv
 - install venv:
   - uv venv
   - source .venv/bin/activate
   - uv pip install scikit-learn numpy stable-baselines3
 
-## How to run
+## How to run the game
 - play the game < 10 times
   - load index.html with Chrome browser
 - store logs in training_data-folder

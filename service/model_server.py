@@ -6,8 +6,8 @@ import numpy as np
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+from board_rules import DIRECTION_NAMES, simulate_move, valid_moves
 
-DIRECTION_NAMES = ["UP", "RIGHT", "DOWN", "LEFT"]
 NAME_TO_INDEX = {name: idx for idx, name in enumerate(DIRECTION_NAMES)}
 
 
@@ -55,77 +55,6 @@ def preprocess_board(grid: List[List[int]]) -> np.ndarray:
     board[board == 0] = 1
     normalized = np.log2(board) / 16.0
     return normalized.flatten().astype(np.float32)
-
-
-def _slide_row_left(row: np.ndarray) -> Tuple[np.ndarray, bool]:
-    non_zero = [v for v in row if v != 0]
-    merged: List[int] = []
-    idx = 0
-    changed = False
-
-    while idx < len(non_zero):
-        value = non_zero[idx]
-        if idx + 1 < len(non_zero) and non_zero[idx + 1] == value:
-            merged.append(value * 2)
-            idx += 2
-            changed = True
-        else:
-            merged.append(value)
-            idx += 1
-
-    merged.extend([0] * (len(row) - len(merged)))
-    if merged != list(row):
-        changed = True
-
-    return np.array(merged, dtype=int), changed
-
-
-def _apply_left(board: np.ndarray) -> Tuple[np.ndarray, bool]:
-    rows = []
-    changed_any = False
-    for row in board:
-        new_row, changed = _slide_row_left(row.tolist())
-        rows.append(new_row)
-        if changed:
-            changed_any = True
-    return np.array(rows, dtype=int), changed_any
-
-
-def simulate_move(grid: List[List[int]], direction: str) -> Tuple[np.ndarray, bool]:
-    arr = np.array(grid, dtype=int)
-    original = arr.copy()
-
-    if direction == "LEFT":
-        next_board, changed = _apply_left(arr)
-    elif direction == "RIGHT":
-        flipped = np.fliplr(arr)
-        moved, changed = _apply_left(flipped)
-        next_board = np.fliplr(moved)
-    elif direction == "UP":
-        transposed = arr.T
-        moved, changed = _apply_left(transposed)
-        next_board = moved.T
-    elif direction == "DOWN":
-        transposed = arr.T
-        flipped = np.fliplr(transposed)
-        moved, changed = _apply_left(flipped)
-        next_board = np.fliplr(moved).T
-    else:
-        raise ValueError(f"Unknown direction: {direction}")
-
-    if not changed:
-        changed = not np.array_equal(next_board, original)
-
-    return next_board, changed
-
-
-def valid_moves(grid: List[List[int]]) -> List[str]:
-    allowed = []
-    for direction in DIRECTION_NAMES:
-        _, changed = simulate_move(grid, direction)
-        if changed:
-            allowed.append(direction)
-    return allowed
 
 
 @app.post("/predict")
