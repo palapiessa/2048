@@ -1,3 +1,5 @@
+"""Pytest session fixtures and Playwright-driven autoplay regression test."""
+
 import json
 import os
 import socket
@@ -148,7 +150,7 @@ def _get_predict_event(page: Page, idx: int):
         idx,
     )
 
-
+# Model server call for next move suggestion
 def _await_predict_payload(
     page: Page,
     event_index: int,

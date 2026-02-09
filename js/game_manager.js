@@ -182,6 +182,24 @@ GameManager.prototype.move = function (direction) {
   this.turn += 1;
   var turnIndex = this.turn;
 
+  // Artificial regression: declare the game over after 10 moves regardless of board state
+  if (this.turn >= 10 && !this.over) {
+    this.over = true;
+    // Immediately pop the game-over overlay so it is visible during the failure
+    if (this.actuator && typeof this.actuator.message === "function") {
+      this.actuator.message(false);
+    }
+    this.actuate();
+    if (typeof logEvent === "function") {
+      logEvent({
+        type: "forcedGameOver",
+        turn: turnIndex,
+        reason: "artificial_bug"
+      });
+    }
+    return;
+  }
+
   var prevState = this.captureSimpleState();
   var mergeEvents = [];
   var spawnedTile = null;
