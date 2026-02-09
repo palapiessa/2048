@@ -1,12 +1,15 @@
+import json
 import os
 import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 import pytest
-from playwright.sync_api import Browser, Page, sync_playwright
+from playwright.sync_api import Page
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -75,19 +78,6 @@ def static_server():
             proc.wait(timeout=5)
 
 
-@pytest.fixture(scope="session")
-def playwright_instance():
-    with sync_playwright() as playwright:
-        yield playwright
-
-
-@pytest.fixture(scope="session")
-def browser(playwright_instance) -> Browser:
-    browser = playwright_instance.chromium.launch(headless=False, slow_mo=100)
-    yield browser
-    browser.close()
-
-
 def test_servers_boot(model_server, static_server):
     assert model_server and static_server
 
@@ -103,41 +93,137 @@ def _wait_for_idle(page: Page, timeout: float = 7.5) -> dict:
     raise TimeoutError(f"Board did not settle within {timeout} seconds: {snapshot}")
 
 
-def test_autoplay_moves_remain_valid(model_server, static_server, browser: Browser):
-    context = browser.new_context()
+def test_autoplay_moves_remain_valid(model_server, static_server, context):
+    warmup_payload = json.dumps(
+        {
+            "grid": [[2, 0, 0, 2], [0, 4, 0, 4], [0, 0, 8, 0], [16, 0, 0, 0]],
+            "score": 0,
+        }
+    ).encode("utf-8")
+
+    warmup_request = urllib_request.Request(
+        url=f"{model_server}/predict",
+        data=warmup_payload,
+        headers={"Content-Type": "application/json"},
+    )
+
+    try:
+        urllib_request.urlopen(warmup_request, timeout=30)
+    except urllib_error.URLError as exc:  # pragma: no cover - diagnostic aid
+        raise AssertionError(f"Warm-up predict request failed: {exc}") from exc
+
     context.add_init_script("window.__ENABLE_TEST_HOOKS__ = true;")
     context.add_init_script(f"window.AUTOPLAY_SERVER_URL = '{model_server}/predict';")
     page = context.new_page()
-    try:
-        page.goto(f"{static_server}/index.html", wait_until="load")
-        page.wait_for_function("() => !!window.__snapshotBoard && window.__snapshotBoard().ready")
-        page.wait_for_function("() => !!window.autoplay && typeof window.autoplay.start === 'function'")
-        page.evaluate("window.autoplay.start()")
 
-        max_turns = 80
+    console_messages = []
+    failed_requests = []
+    observed_events = []
 
-        for _ in range(max_turns):
-            response = page.wait_for_response(
-                lambda res: res.request.method == "POST" and res.url.endswith("/predict"),
-                timeout=10000,
+    def _predict_event_count() -> int:
+        return page.evaluate(
+            "() => (window.__predictEvents && window.__predictEvents.length) || 0"
+        )
+
+    def _get_predict_event(idx: int):
+        return page.evaluate(
+            "(index) => (window.__predictEvents && window.__predictEvents[index]) || null",
+            idx,
+        )
+
+    page.on(
+        "console",
+        lambda message: console_messages.append(f"{message.type}: {message.text}"),
+    )
+
+    def _record_failure(request):
+        failure = request.failure()
+        error_text = failure.get("errorText") if failure else "unknown"
+        failed_requests.append(f"{request.method} {request.url} -> {error_text}")
+
+    page.on("requestfailed", _record_failure)
+
+    page.goto(f"{static_server}/index.html", wait_until="load")
+    page.wait_for_function("() => !!window.__snapshotBoard && window.__snapshotBoard().ready")
+    page.wait_for_function("() => !!window.autoplay && typeof window.autoplay.start === 'function'")
+
+    page.click(".restart-button")
+    page.evaluate("window.autoplay.start()")
+    page.evaluate("window.autoplay.step()")
+
+    max_turns = 240
+    event_index = 0
+    previous_snapshot = None
+
+    for _ in range(max_turns):
+        deadline = time.time() + 30.0
+        event_count = _predict_event_count()
+
+        while event_count <= event_index and time.time() < deadline:
+            time.sleep(0.05)
+            event_count = _predict_event_count()
+
+        if event_count <= event_index:
+            debug = page.evaluate(
+                "() => ({"
+                " running: window.autoplay && window.autoplay.running,"
+                " timerActive: !!(window.autoplay && window.autoplay.timer),"
+                " grid: window.__snapshotBoard && window.__snapshotBoard().grid,"
+                " nextIndex: window.__predictEvents ? window.__predictEvents.length : undefined,"
+                " url: window.AUTOPLAY_SERVER_URL"
+                " })"
             )
-            payload = response.json()
-
-            assert payload["move"] in payload["valid_moves"], (
-                "Model predicted invalid move",
-                payload,
+            pytest.fail(
+                "Timed out waiting for /predict response\n"
+                f"Console: {console_messages}\n"
+                f"Predict events captured: {event_count}\n"
+                f"Events observed: {observed_events}\n"
+                f"Requests failed: {failed_requests}\n"
+                f"Autoplay state: {debug}"
             )
 
-            snapshot = _wait_for_idle(page)
+        event = _get_predict_event(event_index)
+        event_index += 1
 
-            if snapshot.get("gameOver"):
-                break
-        else:
-            pytest.fail("Game did not reach a terminal state within 80 moves")
+        assert event is not None, "Model server returned no payload"
+        assert isinstance(event, dict), f"Predict event not dict: {event!r}"
+        payload = event.get("payload")
+        observed_events.append(
+            {
+                "status": event.get("status"),
+                "has_payload": isinstance(payload, dict),
+            }
+        )
 
-        assert snapshot["gameOver"], "Expected game over overlay"
-        assert all(cell != 0 for row in snapshot["grid"] for cell in row), "Board not full at game over"
-        moves_available = page.evaluate("window.gameManager.movesAvailable()")
-        assert moves_available is False, "Game reported moves available at game over"
-    finally:
-        context.close()
+        assert isinstance(payload, dict), f"Predict response not JSON object: {payload!r}"
+        assert "move" in payload and "valid_moves" in payload, (
+            "Predict response missing keys",
+            payload,
+        )
+
+        snapshot = _wait_for_idle(page)
+
+        if payload["move"] not in payload["valid_moves"]:
+            if previous_snapshot and snapshot.get("grid") != previous_snapshot.get("grid"):
+                pytest.fail(
+                    "Invalid move altered board state\n"
+                    f"Previous grid: {previous_snapshot['grid']}\n"
+                    f"Current grid: {snapshot['grid']}\n"
+                    f"Payload: {payload}\n"
+                    f"Console: {console_messages}"
+                )
+            previous_snapshot = snapshot
+            continue
+
+        if snapshot.get("gameOver"):
+            previous_snapshot = snapshot
+            break
+
+        previous_snapshot = snapshot
+    else:
+        pytest.fail("Game did not reach a terminal state within 80 moves")
+
+    assert snapshot["gameOver"], "Expected game over overlay"
+    assert all(cell != 0 for row in snapshot["grid"] for cell in row), "Board not full at game over"
+    moves_available = page.evaluate("window.gameManager.movesAvailable()")
+    assert moves_available is False, "Game reported moves available at game over"

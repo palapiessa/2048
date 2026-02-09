@@ -77,6 +77,12 @@ def predict():
     allowed = valid_moves(grid)
     invalid_prediction = predicted_move not in allowed
 
+    if invalid_prediction and allowed:
+        allowed_indices = [NAME_TO_INDEX[name] for name in allowed]
+        best_idx = max(allowed_indices, key=lambda i: probabilities[i])
+        predicted_idx = int(best_idx)
+        predicted_move = DIRECTION_NAMES[predicted_idx]
+
     response = {
         "move": predicted_move,
         "move_index": predicted_idx,

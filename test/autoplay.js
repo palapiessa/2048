@@ -115,3 +115,155 @@
 
   initializeAutoplay();
 })();
+
+(function () {
+  if (!window.__ENABLE_TEST_HOOKS__) {
+    return;
+  }
+
+  var busyState = { busy: false };
+  var predictEvents = [];
+
+  function ensureActuatorHook() {
+    if (!window.HTMLActuator || !window.HTMLActuator.prototype) {
+      return false;
+    }
+    var proto = window.HTMLActuator.prototype;
+    if (proto.__testHooked) {
+      return true;
+    }
+
+    var originalActuate = proto.actuate;
+    if (typeof originalActuate !== "function") {
+      return false;
+    }
+
+    proto.actuate = function () {
+      busyState.busy = true;
+      return originalActuate.apply(this, arguments);
+    };
+
+    proto.__testHooked = true;
+    return true;
+  }
+
+  function ensureRafHook() {
+    if (window.__testHooksPatchedRAF) {
+      return true;
+    }
+
+    var originalRAF = window.requestAnimationFrame;
+    if (typeof originalRAF !== "function") {
+      return false;
+    }
+
+    var boundRAF = originalRAF.bind(window);
+    window.requestAnimationFrame = function (callback) {
+      return boundRAF(function (timestamp) {
+        try {
+          callback(timestamp);
+        } finally {
+          window.setTimeout(function () {
+            busyState.busy = false;
+          }, 0);
+        }
+      });
+    };
+
+    window.__testHooksPatchedRAF = true;
+    return true;
+  }
+
+  function ensureFetchHook() {
+    if (window.__testHookedFetch) {
+      return true;
+    }
+
+    if (typeof window.fetch !== "function") {
+      return false;
+    }
+
+    var originalFetch = window.fetch.bind(window);
+    predictEvents = window.__predictEvents = [];
+
+    window.fetch = function (input, init) {
+      var url = "";
+      if (typeof input === "string") {
+        url = input;
+      } else if (input && typeof input.url === "string") {
+        url = input.url;
+      }
+
+      var isPredict = url.indexOf("/predict") !== -1;
+      var result = originalFetch(input, init);
+
+      if (!isPredict) {
+        return result;
+      }
+
+      return result
+        .then(function (response) {
+          try {
+            var clone = response.clone();
+            return clone
+              .json()
+              .then(function (payload) {
+                predictEvents.push({ payload: payload, status: response.status });
+                return response;
+              })
+              .catch(function () {
+                predictEvents.push({ payload: null, status: response.status });
+                return response;
+              });
+          } catch (err) {
+            predictEvents.push({ payload: null, status: response && response.status });
+            return response;
+          }
+        })
+        .catch(function (error) {
+          predictEvents.push({ payload: null, status: null, error: error && error.message });
+          throw error;
+        });
+    };
+
+    window.__testHookedFetch = true;
+    return true;
+  }
+
+  function ensureSnapshot() {
+    if (window.__snapshotBoard && window.__snapshotBoard.__testHooked) {
+      return true;
+    }
+
+    window.__snapshotBoard = function () {
+      if (!window.gameManager) {
+        return { ready: false, busy: busyState.busy };
+      }
+
+      var simple = window.gameManager.captureSimpleState();
+      var overlay = document.querySelector(".game-message");
+      var gameOver = overlay && overlay.classList.contains("game-over");
+
+      return {
+        ready: true,
+        busy: !!busyState.busy,
+        grid: simple.grid,
+        score: simple.score,
+        gameOver: !!gameOver
+      };
+    };
+
+    window.__snapshotBoard.__testHooked = true;
+    return true;
+  }
+
+  function poll() {
+    ensureActuatorHook();
+    ensureFetchHook();
+    ensureRafHook();
+    ensureSnapshot();
+    window.requestAnimationFrame(poll);
+  }
+
+  poll();
+})();
